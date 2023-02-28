@@ -1,0 +1,29 @@
+{
+	"name": "herdao-shell-demo",
+	"version": "0.1.0",
+	"private": true,
+	"scripts": {
+		"dev": "next dev",
+		"build": "next build",
+		"start": "next start",
+		"lint": "next link"
+	},
+	"dependencies": {
+		"@chakra-ui/react": "^2.2.4",
+		"@rainbow-me/rainbowkit": "^0.7.4",
+		"alchemy-sdk": "^2.4.3",
+		"ethers": "^5.7.2",
+		"next": "13.0.2",
+		"react": "18.2.0",
+		"react-dom": "18.2.0",
+		"react-hot-toast": "^2.4.0",
+		"react-icons": "^4.7.1",
+		"react-ipfs-image": "^0.7.0",
+		"use-debounce": "^9.0.3",
+		"wagmi": "^0.7.13"
+	},
+	"devDependencies": {
+		"eslint": "8.33.0",
+		"eslint-config-next": "13.1.6"
+	}
+}

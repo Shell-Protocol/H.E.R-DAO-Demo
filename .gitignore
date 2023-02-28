@@ -1,0 +1,5 @@
+.DS_Store
+
+/solidity/artifacts/
+/solidity/cache/
+/solidity/node_modules/
