@@ -1,11 +1,13 @@
 const { ethers } = require("hardhat");
 const hre = require("hardhat");
 const { OceanABI } = require("./ABI/OceanABI");
-const shell = require("../utils");
 const { ERC20ABI } = require("./ABI/ERC20ABI");
-const { FungibilizerABI } = require("../../next-app/ABIs/Fungibilizer");
+const shell = require("../utils");
 
-const deployPool = async (signer, ocean, tokens, initialLPSupply) => {
+const ONE = ethers.utils.parseEther('1')
+const ABDK_ONE = ethers.BigNumber.from(2).pow(64);
+
+const deployProteus = async (signer, ocean, tokens, ms, _as, bs, ks, initialLPSupply) => {
 
     const init = []
     
@@ -14,25 +16,37 @@ const deployPool = async (signer, ocean, tokens, initialLPSupply) => {
             const tokenContract = await hre.ethers.getContractAt(ERC20ABI, tokens[i].address);
             await tokenContract.connect(signer).approve(ocean.address, tokens[i].intialDeposit);
             init.push(shell.interactions.wrapERC20({address: tokens[i].address, amount: tokens[i].intialDeposit}));
+        } else if(tokens[i].address == 'Ether'){
+            // Wrap ETH into ocean
+            await ocean.connect(signer).doMultipleInteractions([], [tokens[i].oceanID], {value: tokens[i].intialDeposit});
         }
     }
 
     console.log('Approved tokens')
 
-    const poolContract = await ethers.getContractFactory("ConstantProduct", signer)
-    const pool = await poolContract.deploy(
+    const proxyContract = await ethers.getContractFactory("LiquidityPoolProxy", signer);
+    const proteusContract = await ethers.getContractFactory("Proteus", signer);
+
+    const proxy = await proxyContract.deploy(
         tokens[0].oceanID,
         tokens[1].oceanID,
         ocean.address,
         initialLPSupply
-    )
-    await pool.deployed();
+    );
+    await proxy.deployed();
 
-    const lpTokenId = await pool.lpTokenId();
+    const proteus = await proteusContract.deploy(ms, _as, bs, ks);
+    await proteus.deployed();
+
+    await proxy.connect(signer).setImplementation(proteus.address)
+
+    console.log('Deployed liquidity pool proxy and implementation')
+
+    const lpTokenId = await proxy.lpTokenId();
 
     tokens.forEach((token) => {
         init.push(shell.interactions.computeOutputAmount({
-            address: pool.address,
+            address: proxy.address,
             inputToken: token.oceanID,
             outputToken: lpTokenId,
             specifiedAmount: token.intialDeposit,
@@ -47,8 +61,57 @@ const deployPool = async (signer, ocean, tokens, initialLPSupply) => {
     });
 
     console.log('Seeded pool with initial liquidity')
-    console.log('Pool contract address:', pool.address)
+    console.log('Pool contract address:', proxy.address)
     console.log('LP token ID:', lpTokenId.toHexString())
+
+    for(let i = 0; i < tokens.length; i++) {
+        const token = tokens[i]
+        console.log(token.address, ethers.utils.formatUnits(await ocean.connect(signer).balanceOf(proxy.address, token.oceanID)))
+    }
+
+    console.log('LP Supply', ethers.utils.formatUnits(await ocean.connect(signer).balanceOf(signer.address, lpTokenId)))
+
+    try {
+        await hre.run("verify:verify", {
+            address: proxy.address,
+            constructorArguments: [
+                tokens[0].oceanID,
+                tokens[1].oceanID,
+                ocean.address,
+                initialLPSupply
+            ]
+        });
+            
+    } catch {}
+
+    try {
+        await hre.run("verify:verify", {
+            address: proteus.address,
+            constructorArguments: [
+                ms,
+                _as,
+                bs,
+                ks
+            ]
+        });
+    } catch {}
+}
+
+const getParams = async (signer, proxyAddress) => {
+
+    const proxy = await hre.ethers.getContractAt("LiquidityPoolProxy", proxyAddress)
+    const proteusAddress = proxy.implementation();
+
+    const pool = await hre.ethers.getContractAt("Proteus", proteusAddress)
+
+    const ms = (await pool.connect(signer).getSlopes()).map((_m) => ethers.utils.formatUnits(_m.mul(ONE).div(ABDK_ONE)))
+    const _as = (await pool.connect(signer).getAs()).map((_a) => ethers.utils.formatUnits(_a.mul(ONE).div(ABDK_ONE)))
+    const bs = (await pool.connect(signer).getBs()).map((_b) => ethers.utils.formatUnits(_b.mul(ONE).div(ABDK_ONE)))
+    const ks = (await pool.connect(signer).getKs()).map((_k) => ethers.utils.formatUnits(_k.mul(ONE).div(ABDK_ONE)))
+
+    console.log("Params", ms, _as, bs, ks)
+
+    console.log("Fee", await pool.BASE_FEE())
 
 }
 
@@ -67,16 +130,16 @@ const getBalances = async (signer, ocean, poolAddress) => {
 }
 
 async function main() {
+
     const signer = await ethers.getSigner();
 
     console.log('Using', signer.address)
     console.log('User ETH balance', ethers.utils.formatEther(await ethers.provider.getBalance(signer.address)))
 
-    const ocean = await hre.ethers.getContractAt(OceanABI, "0x8178f0844F08543A0Bd4956D892ef462BD7e71C4")   
-    const usdcAddress = '0x1f84761D120F2b47E74d201aa7b90B73cCC3312c';
+    const ocean = await hre.ethers.getContractAt(OceanABI, "0x8178f0844F08543A0Bd4956D892ef462BD7e71C4")    
 
-    const fungibilizer = await hre.ethers.getContractAt(FungibilizerABI, "0x8A5d6D0644e8dD73F93900072eC9D85155B22195") 
-    const toucoinOceanId = await fungibilizer.fungibleTokenId();
+    const usdcAddress = '0x1f84761D120F2b47E74d201aa7b90B73cCC3312c';
+    const toucoinOceanId = '0x5c06caf016ce83ab20b6ddc4c6472be433f7995b36dfa6a8ef8595ebed4b9afd'
 
     const tokens = [
         {
@@ -106,7 +169,15 @@ async function main() {
        
     }
 
-    await deployPool(signer, ocean, tokens, initialLPSupply);
+    // await deployPool(signer, ocean, tokens, initialLPSupply);
+
+    /* EDIT POOL DEPLOY PARAMETERS BELOW */
+
+    const {ms, _as, bs, ks} = require("./params/constant-product");
+
+    await deployProteus(signer, ocean, tokens, ms, _as, bs, ks, initialLPSupply);
+
+    // await getParams(signer, '')
 
     // await getBalances(signer, ocean, '')
 

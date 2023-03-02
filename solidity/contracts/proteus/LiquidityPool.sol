@@ -3,8 +3,8 @@
 
 pragma solidity =0.8.10;
 
-import {IOceanPrimitive} from "./IOceanPrimitive.sol";
-import {IOceanToken} from "./IOceanToken.sol";
+import "../IOceanPrimitive.sol";
+import "../IOceanToken.sol";
 
 interface IERC1155 {
     function balanceOfBatch(address[] calldata accounts, uint256[] calldata ids)

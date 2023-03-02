@@ -13,7 +13,7 @@
 
 ### Setup Enviornment Variables
 * [Alchemy](https://www.alchemy.com/)
-  * Generate an API key for Goerli Arbitrum.
+  * Generate an API key for Goerli Arbitrum or use the provided key for testing.
 
 ### How To Run Locally:
 ```

@@ -19,8 +19,8 @@ export default function Main() {
   const TOUCANS_ADDRESS = "0xF78A86958e15298E3454741C6060CF979283558B";
   const OCEAN_ADDRESS = "0x8178f0844F08543A0Bd4956D892ef462BD7e71C4";
   const USDC_ADDRESS = '0x1f84761D120F2b47E74d201aa7b90B73cCC3312c'
-  const FUNGIBILIZER_ADDRESS = "";
-  const POOL_ADDRESS = ""
+  const FUNGIBILIZER_ADDRESS = "0xb38e064CCc88a6A5DAC2DD3D4220bce2c22a53F9";
+  const POOL_ADDRESS = '0x3884fe8eeE4C03df0D211A2B9DA18d11687924e3'
 
   // hooks
   const isMounted = useIsMounted();
@@ -64,7 +64,12 @@ export default function Main() {
 
     let interaction
 
-    //TODO: Build wrap/unwrap interaction and check for approval
+    if(wrap){
+      if(!(await toucans.isApprovedForAll(address, OCEAN_ADDRESS))) await toucans.setApprovalForAll(OCEAN_ADDRESS, true)
+      interaction = shell.interactions.wrapERC721(TOUCANS_ADDRESS, toucanID)
+    } else {
+      interaction = shell.interactions.unwrapERC721(TOUCANS_ADDRESS, toucanID)            
+    }
 
     shell.executeInteraction(ocean, signer, interaction).then((response) => {
         const toastText = wrap ? 'Wrap' : 'Unwrap'
@@ -89,7 +94,29 @@ export default function Main() {
     
     let interaction
 
-    //TODO: Build fungibilize interaction
+    const fungibleTokenId = await fungibilizer.fungibleTokenId();
+    if(fung){        
+        interaction = shell.interactions.computeOutputAmount(
+            FUNGIBILIZER_ADDRESS, 
+            shell.utils.calculateWrappedTokenId(TOUCANS_ADDRESS, toucanID),
+            fungibleTokenId,
+            1,
+            ethers.utils.hexZeroPad(toucanID, 32)
+        )
+    } else {
+        if (parseInt(userBalances['Toucoin']) > 0) {
+            toucanID = fungibilizerToucans[0];
+            interaction = shell.interactions.computeOutputAmount(
+                FUNGIBILIZER_ADDRESS,
+                fungibleTokenId,
+                shell.utils.calculateWrappedTokenId(TOUCANS_ADDRESS, toucanID),
+                await fungibilizer.exchangeRate(), // Trade 1 toucan's worth
+                ethers.utils.hexZeroPad(toucanID, 32)
+            )
+        } else {
+            console.error("No toucoin to unfungibilize");
+        }
+    }        
 
     shell.executeInteraction(ocean, signer, interaction).then((response) => {
         const toastText = fung ? 'Fungibiliz' : 'Unfungibiliz'
@@ -114,7 +141,46 @@ export default function Main() {
     
     let interactions
 
-    //TODO: Build swap interactions
+    const fungibleTokenId = await fungibilizer.fungibleTokenId();
+    const toucoinRate = await fungibilizer.exchangeRate() // Amount of toucoin per toucan
+
+    if(forward){
+        if (parseInt(userBalances['Toucoin']) > 0) {
+            interactions = [
+                shell.interactions.computeOutputAmount(
+                    POOL_ADDRESS,
+                    fungibleTokenId,
+                    shell.utils.calculateWrappedTokenId(USDC_ADDRESS, 0),
+                    toucoinRate, 
+                    shell.constants.THIRTY_TWO_BYTES_OF_ZERO
+                ),
+                shell.interactions.unwrapERC20(
+                    USDC_ADDRESS,
+                    ethers.constants.MaxUint256
+                )
+            ]
+        } else {
+            console.error("No toucoin to swap");
+        }
+    } else {
+
+      if((await usdc.allowance(address, OCEAN_ADDRESS)) == 0){
+        await usdc.approve(OCEAN_ADDRESS, ethers.constants.MaxUint256);
+      }
+      interactions = [
+        shell.interactions.computeInputAmount(
+            POOL_ADDRESS,
+            shell.utils.calculateWrappedTokenId(USDC_ADDRESS, 0),
+            fungibleTokenId,
+            toucoinRate,
+            shell.constants.THIRTY_TWO_BYTES_OF_ZERO
+        ),
+        shell.interactions.wrapERC20(
+            USDC_ADDRESS,
+            ethers.constants.MaxUint256
+        )
+      ]
+    }
 
     shell.executeInteractions(ocean, signer, interactions).then((response) => {
         const toastText = forward ? 'Toucoin' : 'USDC'
@@ -138,8 +204,34 @@ export default function Main() {
   const handleToucanToUSDC = async (toucanID) => {
 
     if(!(await toucans.isApprovedForAll(address, OCEAN_ADDRESS))) await toucans.setApprovalForAll(OCEAN_ADDRESS, true)
+    
+    const fungibleTokenId = await fungibilizer.fungibleTokenId();
+    const toucoinRate = await fungibilizer.exchangeRate(); // Amount of toucoin per toucan
 
-    //TODO: Build full interaction path to swap NFT to USDC
+    const interactions = [
+      shell.interactions.wrapERC721(
+          TOUCANS_ADDRESS,
+          toucanID
+      ),
+      shell.interactions.computeOutputAmount(
+        FUNGIBILIZER_ADDRESS,
+        shell.utils.calculateWrappedTokenId(TOUCANS_ADDRESS, toucanID),
+        fungibleTokenId,
+        1,
+        ethers.utils.hexZeroPad(toucanID, 32)
+      ),
+      shell.interactions.computeOutputAmount(
+          POOL_ADDRESS,
+          fungibleTokenId,
+          shell.utils.calculateWrappedTokenId(USDC_ADDRESS, 0),
+          toucoinRate,
+          shell.constants.THIRTY_TWO_BYTES_OF_ZERO
+      ),
+      shell.interactions.unwrapERC20(
+        USDC_ADDRESS,
+        ethers.constants.MaxUint256
+      )
+    ]
 
     const toastText = "Trade ";
     shell.executeInteractions(ocean, signer, interactions).then((response) => {
@@ -183,9 +275,9 @@ export default function Main() {
       (token) => token.balance == 1
     );
 
-    const fungibilizerOceanNfts = FUNGIBILIZER_ADDRESS ? (
+    const fungibilizerOceanNfts = (
         await utils.getNfts(FUNGIBILIZER_ADDRESS, OCEAN_ADDRESS)
-    ).filter((token) => token.balance == 1) : [];
+    ).filter((token) => token.balance == 1);
 
     setUserWrappedToucans(
         userOceanNfts.map((userOceanNft) => 
@@ -202,7 +294,7 @@ export default function Main() {
 
   const fetchTokenBalances = async () => {
 
-    const toucoinBalance = FUNGIBILIZER_ADDRESS ? await ocean.balanceOf(address, await fungibilizer.fungibleTokenId()) : '0'
+    const toucoinBalance = await ocean.balanceOf(address, await fungibilizer.fungibleTokenId())
     const usdcBalance = await usdc.balanceOf(address)
 
     const newUserBalances = {
@@ -219,7 +311,7 @@ export default function Main() {
       fetchWrappedNFTs();
       fetchTokenBalances();
     }
-  }, [isConnected]);
+  }, [isConnected, address]);
 
   if (!isConnected && isMounted && isDisconnected) {
     return <DisplayMessage message="Please connect your wallet." />;
@@ -266,9 +358,9 @@ export default function Main() {
                       >
                         Wrap NFT
                       </Button>
-                      {/* <Button onClick={() => handleToucanToUSDC(toucanID)}>
+                      <Button onClick={() => handleToucanToUSDC(toucanID)}>
                         NFT to USDC
-                      </Button> */}
+                      </Button>
                     </div>
                   </GridItem>
                 ))}
